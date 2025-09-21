@@ -1,5 +1,5 @@
 # Väinämöinen Community Moderator
-_Väinämöinen is the wise, rune-singing hero of the Finnish epic Kalevala—a legendary sage whose songs shape the world and guide his people._
+_Väinämöinen is the wise, rune-singing hero of the Finnish epic Kalevala. He is a legendary sage whose songs shape the world and guide his people._
 
 This is an app that delegates moderation powers to established community members based on subreddit-specific user flair.
 
@@ -57,6 +57,10 @@ This is an app that delegates moderation powers to established community members
 - Users must be logged in; otherwise, actions are declined.
 - Automod wiki operations require the bot account to retain wiki permission.
 - Sticky posts use highlight slot 2 by default.
+
+## ToDo
+- App setting for Finnish or English and appropriate translations of app content.
+- Enhanced Logging
 
 ## Learn More
 
