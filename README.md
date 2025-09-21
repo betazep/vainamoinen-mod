@@ -44,9 +44,11 @@ This is an app that delegates moderation powers to established community members
 
 ## Development
 
+- For your own app, change devvit.yaml app name to your app name.
+- Working node environment (dev-env: node 24.8.0 / npm 11.6.0)
 - Playtest: `npm run dev`
-- Type-check: `npm run type-check`
 - Upload: `npm run deploy`
+- Production: `npm run launch`
 
 ## Limitations & Notes
 
