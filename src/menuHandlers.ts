@@ -22,18 +22,53 @@ import {
   randomUnlockPrefix,
 } from './quotes.js';
 
-async function togglePostLock(context: Devvit.Context, postId: string): Promise<void> {
+type ActionResult = {
+  url?: string;
+  actionId?: string;
+};
+
+function formatPermalink(permalink?: string): string | undefined {
+  if (!permalink) return undefined;
+  try {
+    const url = permalink.startsWith('http://') || permalink.startsWith('https://')
+      ? new URL(permalink)
+      : new URL(`https://www.reddit.com${permalink}`);
+    const segments = url.pathname.split('/').filter(Boolean);
+    if (url.hostname === 'www.reddit.com') {
+      url.hostname = 'reddit.com';
+    }
+    if (segments.length >= 5 && segments[0] === 'r' && segments[2] === 'comments') {
+      // Drop the human-readable slug segment to keep the permalink short.
+      segments.splice(4, 1);
+    }
+    const trailingSlash = url.pathname.endsWith('/') ? '/' : '';
+    const path = segments.join('/');
+    let trimmedUrl = path ? `${url.hostname}/${path}${trailingSlash}` : `${url.hostname}${trailingSlash}`;
+    if (url.search) trimmedUrl += url.search;
+    if (url.hash) trimmedUrl += url.hash;
+    return trimmedUrl;
+  } catch {
+    return permalink;
+  }
+}
+
+async function togglePostLock(context: Devvit.Context, postId: string): Promise<ActionResult> {
   const post = await context.reddit.getPostById(postId);
-  if (post.isLocked()) {
+  const wasLocked = post.isLocked();
+  if (wasLocked) {
     await post.unlock();
     context.ui.showToast(`${randomUnlockPrefix()} the post is unlocked.`);
   } else {
     await post.lock();
     context.ui.showToast(`${randomLockPrefix()} the post is locked.`);
   }
+  return {
+    url: formatPermalink(post.permalink),
+    actionId: wasLocked ? 'post-unlock' : 'post-lock',
+  };
 }
 
-async function togglePostSticky(context: Devvit.Context, postId: string): Promise<void> {
+async function togglePostSticky(context: Devvit.Context, postId: string): Promise<ActionResult> {
   const post = await context.reddit.getPostById(postId);
   if (post.isStickied()) {
     await post.unsticky();
@@ -42,39 +77,58 @@ async function togglePostSticky(context: Devvit.Context, postId: string): Promis
     await post.sticky(2);
     context.ui.showToast('Post added to Highlights.');
   }
+  return {
+    url: formatPermalink(post.permalink),
+    actionId: 'post-sticky-toggle',
+  };
 }
 
-async function togglePostRemoval(context: Devvit.Context, postId: string): Promise<void> {
+async function togglePostRemoval(context: Devvit.Context, postId: string): Promise<ActionResult> {
   const post = await context.reddit.getPostById(postId);
-  if (post.isRemoved()) {
+  const wasRemoved = post.isRemoved();
+  if (wasRemoved) {
     await post.approve();
     context.ui.showToast(`${randomRestorePrefix()} the post is restored.`);
   } else {
     await post.remove(false);
     context.ui.showToast(`${randomRemovePrefix()} the post is removed.`);
   }
+  return {
+    url: formatPermalink(post.permalink),
+    actionId: wasRemoved ? 'post-restore' : 'post-remove',
+  };
 }
 
-async function toggleCommentLock(context: Devvit.Context, commentId: string): Promise<void> {
+async function toggleCommentLock(context: Devvit.Context, commentId: string): Promise<ActionResult> {
   const comment = await context.reddit.getCommentById(commentId);
-  if (comment.isLocked()) {
+  const wasLocked = comment.isLocked();
+  if (wasLocked) {
     await comment.unlock();
     context.ui.showToast(`${randomUnlockPrefix()} the comment is unlocked.`);
   } else {
     await comment.lock();
     context.ui.showToast(`${randomLockPrefix()} the comment is locked.`);
   }
+  return {
+    url: formatPermalink(comment.permalink),
+    actionId: wasLocked ? 'comment-unlock' : 'comment-lock',
+  };
 }
 
-async function toggleCommentRemoval(context: Devvit.Context, commentId: string): Promise<void> {
+async function toggleCommentRemoval(context: Devvit.Context, commentId: string): Promise<ActionResult> {
   const comment = await context.reddit.getCommentById(commentId);
-  if (comment.isRemoved()) {
+  const wasRemoved = comment.isRemoved();
+  if (wasRemoved) {
     await comment.approve();
     context.ui.showToast(`${randomRestorePrefix()} the comment is restored.`);
   } else {
     await comment.remove(false);
     context.ui.showToast(`${randomRemovePrefix()} the comment is removed.`);
   }
+  return {
+    url: formatPermalink(comment.permalink),
+    actionId: wasRemoved ? 'comment-restore' : 'comment-remove',
+  };
 }
 
 async function ensureFeatureEnabled(
@@ -90,14 +144,15 @@ async function ensureFeatureEnabled(
 async function guardAction(
   context: Devvit.Context,
   allowedRoles: Role[],
-  action: () => Promise<void>,
+  action: () => Promise<ActionResult>,
   actionName?: string,
 ): Promise<void> {
   const role = await ensureRoleOrToast(context, allowedRoles);
   if (!role) return;
   if (!(await ensureNotBanned(context))) return;
-  await action();
-  if (await warnIfAbusive(context, actionName)) {
+  const result = await action();
+  const finalAction = result.actionId ?? actionName;
+  if (await warnIfAbusive(context, finalAction, result.url)) {
     return;
   }
 }
@@ -107,7 +162,7 @@ export async function handlePostLockToggle(
   context: Devvit.Context,
 ): Promise<void> {
   try {
-    await guardAction(context, [Role.Baby, Role.Main], () => togglePostLock(context, event.targetId), 'post-lock-toggle');
+    await guardAction(context, [Role.Baby, Role.Main], () => togglePostLock(context, event.targetId), 'post-lock');
   } catch {
     context.ui.showToast('Failed to toggle lock');
   }
@@ -133,7 +188,7 @@ export async function handlePostRemoveToggle(
     return;
   }
   try {
-    await guardAction(context, [Role.Main], () => togglePostRemoval(context, event.targetId), 'post-remove-toggle');
+    await guardAction(context, [Role.Main], () => togglePostRemoval(context, event.targetId), 'post-remove');
   } catch {
     context.ui.showToast('Failed to toggle remove/restore');
   }
@@ -144,7 +199,7 @@ export async function handleCommentLockToggle(
   context: Devvit.Context,
 ): Promise<void> {
   try {
-    await guardAction(context, [Role.Baby, Role.Main], () => toggleCommentLock(context, event.targetId), 'comment-lock-toggle');
+    await guardAction(context, [Role.Baby, Role.Main], () => toggleCommentLock(context, event.targetId), 'comment-lock');
   } catch {
     context.ui.showToast('Failed to toggle lock');
   }
@@ -159,7 +214,7 @@ export async function handleCommentRemoveToggle(
     return;
   }
   try {
-    await guardAction(context, [Role.Main], () => toggleCommentRemoval(context, event.targetId), 'comment-remove-toggle');
+    await guardAction(context, [Role.Main], () => toggleCommentRemoval(context, event.targetId), 'comment-remove');
   } catch {
     context.ui.showToast('Failed to toggle remove/restore');
   }
@@ -271,8 +326,17 @@ async function runInitialSetup(context: Devvit.Context): Promise<void> {
 }
 
 const ACTION_LABELS: Record<string, string> = {
-  'post-lock-toggle': 'Post Lock/Unlock',
+  'post-lock': 'Post Lock',
+  'post-unlock': 'Post Unlock',
   'post-sticky-toggle': 'Post Sticky/Unsticky',
+  'post-remove': 'Post Remove',
+  'post-restore': 'Post Restore',
+  'comment-lock': 'Comment Lock',
+  'comment-unlock': 'Comment Unlock',
+  'comment-remove': 'Comment Remove',
+  'comment-restore': 'Comment Restore',
+  // Legacy combined action keys
+  'post-lock-toggle': 'Post Lock/Unlock',
   'post-remove-toggle': 'Post Remove/Restore',
   'comment-lock-toggle': 'Comment Lock/Unlock',
   'comment-remove-toggle': 'Comment Remove/Restore',
@@ -284,9 +348,18 @@ const ACTION_LABELS: Record<string, string> = {
 };
 
 const ACTION_COUNT_LABELS: Record<string, string> = {
+  'post-lock': 'Lock/Unlock',
+  'post-unlock': 'Lock/Unlock',
+  'post-remove': 'Remove/Restore',
+  'post-restore': 'Remove/Restore',
+  'comment-lock': 'Lock/Unlock',
+  'comment-unlock': 'Lock/Unlock',
+  'comment-remove': 'Remove/Restore',
+  'comment-restore': 'Remove/Restore',
+  // Legacy combined action keys
   'post-lock-toggle': 'Lock/Unlock',
-  'comment-lock-toggle': 'Lock/Unlock',
   'post-remove-toggle': 'Remove/Restore',
+  'comment-lock-toggle': 'Lock/Unlock',
   'comment-remove-toggle': 'Remove/Restore',
   'post-sticky-toggle': 'Sticky/Unsticky',
   'initialize-flair': 'Initialize Flair Templates',
@@ -301,9 +374,12 @@ function formatActionEntries(entriesValue: unknown): string[] {
     .sort((a, b) => b.t - a.t)
     .map((entry) => {
       const iso = new Date(entry.t).toISOString();
-      if (!entry.a) return iso;
-      const label = ACTION_LABELS[entry.a] ?? entry.a;
-      return `${iso} — ${label}`;
+      const label = entry.a ? ACTION_LABELS[entry.a] ?? entry.a : undefined;
+      const base = label ? `${iso} — ${label}` : iso;
+      if (entry.u) {
+        return `${base}\n    ${entry.u}`;
+      }
+      return base;
     });
   return entries;
 }

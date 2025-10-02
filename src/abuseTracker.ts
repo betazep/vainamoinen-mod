@@ -29,6 +29,7 @@ type AbuseRecord = {
 export type StoredAbuseAction = {
   t: number;
   a?: string;
+  u?: string;
 };
 
 export function normalizeActionLog(value: unknown): StoredAbuseAction[] {
@@ -41,10 +42,12 @@ export function normalizeActionLog(value: unknown): StoredAbuseAction[] {
       if (entry && typeof entry === 'object' && 't' in entry) {
         const timestamp = (entry as { t: unknown }).t;
         const action = (entry as { a?: unknown }).a;
+        const url = (entry as { u?: unknown }).u;
         if (typeof timestamp === 'number' && Number.isFinite(timestamp)) {
           return {
             t: timestamp,
             a: typeof action === 'string' ? action : undefined,
+            u: typeof url === 'string' ? url : undefined,
           } as StoredAbuseAction;
         }
       }
@@ -130,6 +133,7 @@ export async function isUserBanned(context: Context, username?: string): Promise
 export async function recordModeratorAction(
   context: Context,
   action?: string,
+  url?: string,
 ): Promise<AbuseRecord | undefined> {
   if (!context.kvStore) return undefined;
   const username = await context.reddit.getCurrentUsername();
@@ -147,7 +151,7 @@ export async function recordModeratorAction(
   }
   const stored = normalizeActionLog(storedRaw);
   const trimmed = stored.filter((entry) => entry.t > now - LOG_WINDOW_MS);
-  trimmed.push({ t: now, a: action });
+  trimmed.push({ t: now, a: action, u: url });
   await context.kvStore.put(key, trimmed);
   await context.kvStore.delete(legacyHistoryKey(username));
   await ensureIndex(context, username);
@@ -163,6 +167,7 @@ export async function appendActionLogEntry(
   context: Context,
   username: string,
   action: string,
+  url?: string,
 ): Promise<void> {
   if (!context.kvStore) return;
   const now = Date.now();
@@ -174,7 +179,7 @@ export async function appendActionLogEntry(
   }
   const stored = normalizeActionLog(storedRaw);
   const trimmed = stored.filter((entry) => entry.t > logCutoff);
-  trimmed.push({ t: now, a: action });
+  trimmed.push({ t: now, a: action, u: url });
   await context.kvStore.put(key, trimmed);
   await context.kvStore.delete(legacyHistoryKey(username));
   await ensureIndex(context, username);

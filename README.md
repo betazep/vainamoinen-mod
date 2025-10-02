@@ -51,6 +51,10 @@ This is an app that delegates moderation powers to established community members
 - Upload: `npm run deploy`
 - Production: `npm run launch`
 
+## Changelog
+
+See [`CHANGELOG.md`](./CHANGELOG.md) for version history and release notes.
+
 ## Limitations & Notes
 
 - It doesn't seem Devvit can hide menu items by flair, so enforcement happens during `onPress`.

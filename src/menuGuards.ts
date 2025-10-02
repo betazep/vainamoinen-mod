@@ -35,10 +35,11 @@ export async function ensureNotBanned(context: Devvit.Context): Promise<boolean>
 export async function warnIfAbusive(
   context: Devvit.Context,
   action?: string,
+  url?: string,
 ): Promise<boolean> {
   if (!context.kvStore) return false;
   try {
-    const info = await recordModeratorAction(context, action);
+    const info = await recordModeratorAction(context, action, url);
     if (!info) return false;
     const { hourlyCount, dailyCount, username, banned } = info;
     const message = getAbuseMessage(hourlyCount, dailyCount);
