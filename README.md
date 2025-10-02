@@ -53,7 +53,7 @@ This is an app that delegates moderation powers to established community members
 
 ## Changelog
 
-See [`CHANGELOG.md`](./CHANGELOG.md) for version history and release notes.
+See [`CHANGELOG.md`](https://github.com/betazep/vainamoinen-mod/blob/master/CHANGELOG.md) for version history and release notes.
 
 ## Limitations & Notes
 
