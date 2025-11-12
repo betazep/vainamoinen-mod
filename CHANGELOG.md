@@ -12,6 +12,11 @@ All notable changes to this project will be documented in this file. This projec
 ### Changed
 - Action log entries now display compact Reddit links.
 
+## 1.1.1 - 2025-11-13
+
+### Removed
+- Retired the temporary "Cleanup Remove/Restore Counts" moderator utility now that historical data has been refreshed.
+
 ## 1.1.0 - 2025-11-13
 
 ### Added

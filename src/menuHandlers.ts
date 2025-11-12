@@ -671,31 +671,6 @@ async function stripLegacyCountsAtKey(context: Devvit.Context, key: string): Pro
   return true;
 }
 
-async function cleanupLegacyRemoveRestoreCounts(context: Devvit.Context): Promise<void> {
-  if (!context.kvStore) {
-    context.ui.showToast('KV Store unavailable in this context.');
-    return;
-  }
-  const usernames = await loadTrackedUsernames(context);
-  let updated = 0;
-  for (const username of usernames) {
-    try {
-      const currentChanged = await stripLegacyCountsAtKey(context, actionCountKey(username));
-      const legacyChanged = await stripLegacyCountsAtKey(context, legacyActionCountKey(username));
-      if (currentChanged || legacyChanged) {
-        updated += 1;
-      }
-    } catch (error) {
-      console.error('[vainamoinen] failed to cleanup legacy counts for', username, error);
-    }
-  }
-  if (updated === 0) {
-    context.ui.showToast('No legacy Remove/Restore counts found.');
-  } else {
-    context.ui.showToast(`Removed legacy Remove/Restore counts for ${updated} user${updated === 1 ? '' : 's'}.`);
-  }
-}
-
 const confirmClearActionLogForm = Devvit.createForm(
   () => ({
     title: 'Confirm Log Clear',
@@ -719,32 +694,6 @@ export async function handleClearActionLog(
     return;
   }
   context.ui.showForm(confirmClearActionLogForm, {});
-}
-
-const cleanupRemoveRestoreCountsForm = Devvit.createForm(
-  () => ({
-    title: 'Cleanup Remove/Restore Counts',
-    description:
-      'This removes the legacy combined Remove/Restore counters for all tracked users without affecting other action counts.',
-    acceptLabel: 'OK',
-    cancelLabel: 'Cancel',
-    fields: [],
-  }),
-  async (_event, formContext) => {
-    await cleanupLegacyRemoveRestoreCounts(formContext);
-  },
-);
-
-export async function handleCleanupRemoveRestoreCounts(
-  _event: MenuItemOnPressEvent,
-  context: Devvit.Context,
-): Promise<void> {
-  if (!(await ensureNotBanned(context))) return;
-  if (!context.kvStore) {
-    context.ui.showToast('KV Store unavailable in this context.');
-    return;
-  }
-  context.ui.showForm(cleanupRemoveRestoreCountsForm, {});
 }
 
 const initialSetupForm = Devvit.createForm(

@@ -105,13 +105,6 @@ export function registerMenuItems(Devvit: typeof import('@devvit/public-api').De
 
   Devvit.addMenuItem({
     location: 'subreddit',
-    label: 'Cleanup Remove/Restore Counts',
-    forUserType: 'moderator',
-    onPress: handleCleanupRemoveRestoreCounts,
-  });
-
-  Devvit.addMenuItem({
-    location: 'subreddit',
     label: 'View Action Counts',
     forUserType: 'moderator',
     onPress: handleViewActionCounts,

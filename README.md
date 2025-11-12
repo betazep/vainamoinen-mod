@@ -40,7 +40,6 @@ This is an app that delegates moderation powers to established community members
 - **View Action Counts** – lifetime totals of each delegated action (Remove and Restore tracked separately).
 - **Clear Action Log** – deletes stored timestamps while retaining cumulative counts.
 - **Freeze/Unfreeze State (Mod)** – post/comment buttons that block delegated Remove/Restore/Lock/Sticky until unfrozen.
-- **Cleanup Remove/Restore Counts** – temporary maintenance button that strips legacy combined counts without touching other metrics.
 
 ### User Utilities
 - **My Action Log** – available to everyone for personal accountability.
