@@ -10,11 +10,14 @@ import {
   legacyActionCountKey,
   legacyHistoryKey,
   normalizeActionLog,
+  appendActionLogEntry,
 } from './abuseTracker.js';
 import { resultForm } from './forms/resultForm.js';
-import { ensureNotBanned, ensureRoleOrToast, warnIfAbusive } from './menuGuards.js';
+import { ensureModeratorOrToast, ensureNotBanned, ensureRoleOrToast, warnIfAbusive } from './menuGuards.js';
 import { isRemoveRestoreCommentsEnabled, isRemoveRestorePostsEnabled } from './menuSettings.js';
 import { BABY_FLAIR, MAIN_FLAIR, Role } from './roles.js';
+import { isTargetFrozen, toggleTargetFrozen } from './freezeState.js';
+import type { FreezeTargetType } from './freezeState.js';
 import {
   randomLockPrefix,
   randomRemovePrefix,
@@ -25,7 +28,39 @@ import {
 type ActionResult = {
   url?: string;
   actionId?: string;
+  performed?: boolean;
+  skipAbuseTracking?: boolean;
 };
+
+const LEGACY_REMOVE_COUNTER_KEYS = ['post-remove-toggle', 'comment-remove-toggle'];
+
+async function ensureTargetThawed(
+  context: Devvit.Context,
+  targetType: FreezeTargetType,
+  targetId: string,
+): Promise<boolean> {
+  if (!(await isTargetFrozen(context, targetType, targetId))) {
+    return true;
+  }
+  const noun = targetType === 'post' ? 'post' : 'comment';
+  context.ui.showToast(`This ${noun} has been frozen by a moderator.`);
+  return false;
+}
+
+async function logActionWithoutCounts(
+  context: Devvit.Context,
+  actionId?: string,
+  url?: string,
+): Promise<void> {
+  if (!actionId) return;
+  const username = await context.reddit.getCurrentUsername();
+  if (!username) return;
+  try {
+    await appendActionLogEntry(context, username, actionId, url, false);
+  } catch (error) {
+    console.error('[vainamoinen] failed to log freeze action', error);
+  }
+}
 
 function formatPermalink(permalink?: string): string | undefined {
   if (!permalink) return undefined;
@@ -52,7 +87,10 @@ function formatPermalink(permalink?: string): string | undefined {
   }
 }
 
-async function togglePostLock(context: Devvit.Context, postId: string): Promise<ActionResult> {
+async function togglePostLock(context: Devvit.Context, postId: string): Promise<ActionResult | undefined> {
+  if (!(await ensureTargetThawed(context, 'post', postId))) {
+    return undefined;
+  }
   const post = await context.reddit.getPostById(postId);
   const wasLocked = post.isLocked();
   if (wasLocked) {
@@ -65,10 +103,14 @@ async function togglePostLock(context: Devvit.Context, postId: string): Promise<
   return {
     url: formatPermalink(post.permalink),
     actionId: wasLocked ? 'post-unlock' : 'post-lock',
+    performed: true,
   };
 }
 
-async function togglePostSticky(context: Devvit.Context, postId: string): Promise<ActionResult> {
+async function togglePostSticky(context: Devvit.Context, postId: string): Promise<ActionResult | undefined> {
+  if (!(await ensureTargetThawed(context, 'post', postId))) {
+    return undefined;
+  }
   const post = await context.reddit.getPostById(postId);
   if (post.isStickied()) {
     await post.unsticky();
@@ -80,26 +122,50 @@ async function togglePostSticky(context: Devvit.Context, postId: string): Promis
   return {
     url: formatPermalink(post.permalink),
     actionId: 'post-sticky-toggle',
+    performed: true,
   };
 }
 
-async function togglePostRemoval(context: Devvit.Context, postId: string): Promise<ActionResult> {
-  const post = await context.reddit.getPostById(postId);
-  const wasRemoved = post.isRemoved();
-  if (wasRemoved) {
-    await post.approve();
-    context.ui.showToast(`${randomRestorePrefix()} the post is restored.`);
-  } else {
-    await post.remove(false);
-    context.ui.showToast(`${randomRemovePrefix()} the post is removed.`);
+async function removePost(context: Devvit.Context, postId: string): Promise<ActionResult | undefined> {
+  if (!(await ensureTargetThawed(context, 'post', postId))) {
+    return undefined;
   }
+  const post = await context.reddit.getPostById(postId);
+  if (post.isRemoved()) {
+    context.ui.showToast('Post is already removed.');
+    return { performed: false };
+  }
+  await post.remove(false);
+  context.ui.showToast(`${randomRemovePrefix()} the post is removed.`);
   return {
     url: formatPermalink(post.permalink),
-    actionId: wasRemoved ? 'post-restore' : 'post-remove',
+    actionId: 'post-remove',
+    performed: true,
   };
 }
 
-async function toggleCommentLock(context: Devvit.Context, commentId: string): Promise<ActionResult> {
+async function restorePost(context: Devvit.Context, postId: string): Promise<ActionResult | undefined> {
+  if (!(await ensureTargetThawed(context, 'post', postId))) {
+    return undefined;
+  }
+  const post = await context.reddit.getPostById(postId);
+  if (!post.isRemoved()) {
+    context.ui.showToast('Post is not removed.');
+    return { performed: false };
+  }
+  await post.approve();
+  context.ui.showToast(`${randomRestorePrefix()} the post is restored.`);
+  return {
+    url: formatPermalink(post.permalink),
+    actionId: 'post-restore',
+    performed: true,
+  };
+}
+
+async function toggleCommentLock(context: Devvit.Context, commentId: string): Promise<ActionResult | undefined> {
+  if (!(await ensureTargetThawed(context, 'comment', commentId))) {
+    return undefined;
+  }
   const comment = await context.reddit.getCommentById(commentId);
   const wasLocked = comment.isLocked();
   if (wasLocked) {
@@ -112,23 +178,106 @@ async function toggleCommentLock(context: Devvit.Context, commentId: string): Pr
   return {
     url: formatPermalink(comment.permalink),
     actionId: wasLocked ? 'comment-unlock' : 'comment-lock',
+    performed: true,
   };
 }
 
-async function toggleCommentRemoval(context: Devvit.Context, commentId: string): Promise<ActionResult> {
-  const comment = await context.reddit.getCommentById(commentId);
-  const wasRemoved = comment.isRemoved();
-  if (wasRemoved) {
-    await comment.approve();
-    context.ui.showToast(`${randomRestorePrefix()} the comment is restored.`);
-  } else {
-    await comment.remove(false);
-    context.ui.showToast(`${randomRemovePrefix()} the comment is removed.`);
+async function removeComment(context: Devvit.Context, commentId: string): Promise<ActionResult | undefined> {
+  if (!(await ensureTargetThawed(context, 'comment', commentId))) {
+    return undefined;
   }
+  const comment = await context.reddit.getCommentById(commentId);
+  if (comment.isRemoved()) {
+    context.ui.showToast('Comment is already removed.');
+    return { performed: false };
+  }
+  await comment.remove(false);
+  context.ui.showToast(`${randomRemovePrefix()} the comment is removed.`);
   return {
     url: formatPermalink(comment.permalink),
-    actionId: wasRemoved ? 'comment-restore' : 'comment-remove',
+    actionId: 'comment-remove',
+    performed: true,
   };
+}
+
+async function restoreComment(context: Devvit.Context, commentId: string): Promise<ActionResult | undefined> {
+  if (!(await ensureTargetThawed(context, 'comment', commentId))) {
+    return undefined;
+  }
+  const comment = await context.reddit.getCommentById(commentId);
+  if (!comment.isRemoved()) {
+    context.ui.showToast('Comment is not removed.');
+    return { performed: false };
+  }
+  await comment.approve();
+  context.ui.showToast(`${randomRestorePrefix()} the comment is restored.`);
+  return {
+    url: formatPermalink(comment.permalink),
+    actionId: 'comment-restore',
+    performed: true,
+  };
+}
+
+async function togglePostFreeze(context: Devvit.Context, postId: string): Promise<ActionResult | undefined> {
+  const post = await context.reddit.getPostById(postId);
+  const frozen = await toggleTargetFrozen(context, 'post', postId);
+  context.ui.showToast(
+    frozen ? 'Post frozen. Remove/Restore, Lock/Unlock, and Sticky actions are disabled.' : 'Post unfrozen. Actions re-enabled.',
+  );
+  return {
+    url: formatPermalink(post.permalink),
+    actionId: frozen ? 'post-freeze' : 'post-unfreeze',
+    performed: true,
+    skipAbuseTracking: true,
+  };
+}
+
+async function toggleCommentFreeze(context: Devvit.Context, commentId: string): Promise<ActionResult | undefined> {
+  const comment = await context.reddit.getCommentById(commentId);
+  const frozen = await toggleTargetFrozen(context, 'comment', commentId);
+  context.ui.showToast(
+    frozen
+      ? 'Comment frozen. Remove/Restore and Lock/Unlock actions are disabled.'
+      : 'Comment unfrozen. Actions re-enabled.',
+  );
+  return {
+    url: formatPermalink(comment.permalink),
+    actionId: frozen ? 'comment-freeze' : 'comment-unfreeze',
+    performed: true,
+    skipAbuseTracking: true,
+  };
+}
+
+export async function handlePostFreezeToggle(
+  event: MenuItemOnPressEvent,
+  context: Devvit.Context,
+): Promise<void> {
+  if (!(await ensureModeratorOrToast(context))) return;
+  try {
+    const result = await guardAction(context, undefined, () => togglePostFreeze(context, event.targetId));
+    if (result?.performed) {
+      await logActionWithoutCounts(context, result.actionId, result.url);
+    }
+  } catch (error) {
+    console.error('[vainamoinen] Failed to toggle post freeze state', error);
+    context.ui.showToast('Failed to update post freeze state.');
+  }
+}
+
+export async function handleCommentFreezeToggle(
+  event: MenuItemOnPressEvent,
+  context: Devvit.Context,
+): Promise<void> {
+  if (!(await ensureModeratorOrToast(context))) return;
+  try {
+    const result = await guardAction(context, undefined, () => toggleCommentFreeze(context, event.targetId));
+    if (result?.performed) {
+      await logActionWithoutCounts(context, result.actionId, result.url);
+    }
+  } catch (error) {
+    console.error('[vainamoinen] Failed to toggle comment freeze state', error);
+    context.ui.showToast('Failed to update comment freeze state.');
+  }
 }
 
 async function ensureFeatureEnabled(
@@ -143,18 +292,23 @@ async function ensureFeatureEnabled(
 
 async function guardAction(
   context: Devvit.Context,
-  allowedRoles: Role[],
-  action: () => Promise<ActionResult>,
+  allowedRoles: Role[] | undefined,
+  action: () => Promise<ActionResult | undefined>,
   actionName?: string,
-): Promise<void> {
-  const role = await ensureRoleOrToast(context, allowedRoles);
-  if (!role) return;
+): Promise<ActionResult | undefined> {
+  if (allowedRoles && allowedRoles.length > 0) {
+    const role = await ensureRoleOrToast(context, allowedRoles);
+    if (!role) return;
+  }
   if (!(await ensureNotBanned(context))) return;
   const result = await action();
+  if (!result) return undefined;
+  if (result.performed === false) return result;
+  if (result.skipAbuseTracking) return result;
   const finalAction = result.actionId ?? actionName;
-  if (await warnIfAbusive(context, finalAction, result.url)) {
-    return;
-  }
+  if (!finalAction) return result;
+  await warnIfAbusive(context, finalAction, result.url);
+  return result;
 }
 
 export async function handlePostLockToggle(
@@ -179,18 +333,27 @@ export async function handlePostStickyToggle(
   }
 }
 
-export async function handlePostRemoveToggle(
-  event: MenuItemOnPressEvent,
-  context: Devvit.Context,
-): Promise<void> {
+export async function handlePostRemove(event: MenuItemOnPressEvent, context: Devvit.Context): Promise<void> {
   const featureEnabled = await isRemoveRestorePostsEnabled(context);
   if (!(await ensureFeatureEnabled(context, featureEnabled, 'Remove/Restore is disabled for posts.'))) {
     return;
   }
   try {
-    await guardAction(context, [Role.Main], () => togglePostRemoval(context, event.targetId), 'post-remove');
+    await guardAction(context, [Role.Main], () => removePost(context, event.targetId), 'post-remove');
   } catch {
-    context.ui.showToast('Failed to toggle remove/restore');
+    context.ui.showToast('Failed to remove post.');
+  }
+}
+
+export async function handlePostRestore(event: MenuItemOnPressEvent, context: Devvit.Context): Promise<void> {
+  const featureEnabled = await isRemoveRestorePostsEnabled(context);
+  if (!(await ensureFeatureEnabled(context, featureEnabled, 'Remove/Restore is disabled for posts.'))) {
+    return;
+  }
+  try {
+    await guardAction(context, [Role.Main], () => restorePost(context, event.targetId), 'post-restore');
+  } catch {
+    context.ui.showToast('Failed to restore post.');
   }
 }
 
@@ -205,18 +368,27 @@ export async function handleCommentLockToggle(
   }
 }
 
-export async function handleCommentRemoveToggle(
-  event: MenuItemOnPressEvent,
-  context: Devvit.Context,
-): Promise<void> {
+export async function handleCommentRemove(event: MenuItemOnPressEvent, context: Devvit.Context): Promise<void> {
   const featureEnabled = await isRemoveRestoreCommentsEnabled(context);
   if (!(await ensureFeatureEnabled(context, featureEnabled, 'Remove/Restore is disabled for comments.'))) {
     return;
   }
   try {
-    await guardAction(context, [Role.Main], () => toggleCommentRemoval(context, event.targetId), 'comment-remove');
+    await guardAction(context, [Role.Main], () => removeComment(context, event.targetId), 'comment-remove');
   } catch {
-    context.ui.showToast('Failed to toggle remove/restore');
+    context.ui.showToast('Failed to remove comment.');
+  }
+}
+
+export async function handleCommentRestore(event: MenuItemOnPressEvent, context: Devvit.Context): Promise<void> {
+  const featureEnabled = await isRemoveRestoreCommentsEnabled(context);
+  if (!(await ensureFeatureEnabled(context, featureEnabled, 'Remove/Restore is disabled for comments.'))) {
+    return;
+  }
+  try {
+    await guardAction(context, [Role.Main], () => restoreComment(context, event.targetId), 'comment-restore');
+  } catch {
+    context.ui.showToast('Failed to restore comment.');
   }
 }
 
@@ -331,10 +503,14 @@ const ACTION_LABELS: Record<string, string> = {
   'post-sticky-toggle': 'Post Sticky/Unsticky',
   'post-remove': 'Post Remove',
   'post-restore': 'Post Restore',
+  'post-freeze': 'Post Frozen',
+  'post-unfreeze': 'Post Unfrozen',
   'comment-lock': 'Comment Lock',
   'comment-unlock': 'Comment Unlock',
   'comment-remove': 'Comment Remove',
   'comment-restore': 'Comment Restore',
+  'comment-freeze': 'Comment Frozen',
+  'comment-unfreeze': 'Comment Unfrozen',
   // Legacy combined action keys
   'post-lock-toggle': 'Post Lock/Unlock',
   'post-remove-toggle': 'Post Remove/Restore',
@@ -350,12 +526,12 @@ const ACTION_LABELS: Record<string, string> = {
 const ACTION_COUNT_LABELS: Record<string, string> = {
   'post-lock': 'Lock/Unlock',
   'post-unlock': 'Lock/Unlock',
-  'post-remove': 'Remove/Restore',
-  'post-restore': 'Remove/Restore',
+  'post-remove': 'Remove',
+  'post-restore': 'Restore',
   'comment-lock': 'Lock/Unlock',
   'comment-unlock': 'Lock/Unlock',
-  'comment-remove': 'Remove/Restore',
-  'comment-restore': 'Remove/Restore',
+  'comment-remove': 'Remove',
+  'comment-restore': 'Restore',
   // Legacy combined action keys
   'post-lock-toggle': 'Lock/Unlock',
   'post-remove-toggle': 'Remove/Restore',
@@ -462,6 +638,64 @@ async function clearActionLogData(context: Devvit.Context): Promise<void> {
   console.log('[vainamoinen] action log cleared by moderator', { usernamesCleared: usernames });
 }
 
+function cloneNumericCounts(value: unknown): Record<string, number> | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const result: Record<string, number> = {};
+  let hasEntry = false;
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof raw === 'number' && Number.isFinite(raw)) {
+      result[key] = raw;
+      hasEntry = true;
+    }
+  }
+  return hasEntry ? result : undefined;
+}
+
+async function stripLegacyCountsAtKey(context: Devvit.Context, key: string): Promise<boolean> {
+  if (!context.kvStore) return false;
+  const counts = cloneNumericCounts(await context.kvStore.get(key));
+  if (!counts) return false;
+  let changed = false;
+  for (const legacyKey of LEGACY_REMOVE_COUNTER_KEYS) {
+    if (legacyKey in counts) {
+      delete counts[legacyKey];
+      changed = true;
+    }
+  }
+  if (!changed) return false;
+  if (Object.keys(counts).length === 0) {
+    await context.kvStore.delete(key);
+  } else {
+    await context.kvStore.put(key, counts);
+  }
+  return true;
+}
+
+async function cleanupLegacyRemoveRestoreCounts(context: Devvit.Context): Promise<void> {
+  if (!context.kvStore) {
+    context.ui.showToast('KV Store unavailable in this context.');
+    return;
+  }
+  const usernames = await loadTrackedUsernames(context);
+  let updated = 0;
+  for (const username of usernames) {
+    try {
+      const currentChanged = await stripLegacyCountsAtKey(context, actionCountKey(username));
+      const legacyChanged = await stripLegacyCountsAtKey(context, legacyActionCountKey(username));
+      if (currentChanged || legacyChanged) {
+        updated += 1;
+      }
+    } catch (error) {
+      console.error('[vainamoinen] failed to cleanup legacy counts for', username, error);
+    }
+  }
+  if (updated === 0) {
+    context.ui.showToast('No legacy Remove/Restore counts found.');
+  } else {
+    context.ui.showToast(`Removed legacy Remove/Restore counts for ${updated} user${updated === 1 ? '' : 's'}.`);
+  }
+}
+
 const confirmClearActionLogForm = Devvit.createForm(
   () => ({
     title: 'Confirm Log Clear',
@@ -485,6 +719,32 @@ export async function handleClearActionLog(
     return;
   }
   context.ui.showForm(confirmClearActionLogForm, {});
+}
+
+const cleanupRemoveRestoreCountsForm = Devvit.createForm(
+  () => ({
+    title: 'Cleanup Remove/Restore Counts',
+    description:
+      'This removes the legacy combined Remove/Restore counters for all tracked users without affecting other action counts.',
+    acceptLabel: 'OK',
+    cancelLabel: 'Cancel',
+    fields: [],
+  }),
+  async (_event, formContext) => {
+    await cleanupLegacyRemoveRestoreCounts(formContext);
+  },
+);
+
+export async function handleCleanupRemoveRestoreCounts(
+  _event: MenuItemOnPressEvent,
+  context: Devvit.Context,
+): Promise<void> {
+  if (!(await ensureNotBanned(context))) return;
+  if (!context.kvStore) {
+    context.ui.showToast('KV Store unavailable in this context.');
+    return;
+  }
+  context.ui.showForm(cleanupRemoveRestoreCountsForm, {});
 }
 
 const initialSetupForm = Devvit.createForm(

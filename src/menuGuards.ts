@@ -32,6 +32,27 @@ export async function ensureNotBanned(context: Devvit.Context): Promise<boolean>
   return true;
 }
 
+export async function ensureModeratorOrToast(context: Devvit.Context): Promise<boolean> {
+  const subredditName = context.subredditName;
+  const user = await context.reddit.getCurrentUser();
+  if (!subredditName || !user) {
+    context.ui.showToast('Only moderators can use this action.');
+    return false;
+  }
+  try {
+    const permissions = await user.getModPermissionsForSubreddit(subredditName);
+    if (permissions.length === 0) {
+      context.ui.showToast('Only moderators can use this action.');
+      return false;
+    }
+    return true;
+  } catch (error) {
+    console.error('[vainamoinen] failed to confirm moderator permissions', error);
+    context.ui.showToast('Unable to verify moderator permissions.');
+    return false;
+  }
+}
+
 export async function warnIfAbusive(
   context: Devvit.Context,
   action?: string,

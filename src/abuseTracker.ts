@@ -11,6 +11,8 @@ const DAILY_LAST_WARNING_THRESHOLD = 11;
 export const DAILY_BAN_THRESHOLD = 12;
 const BAN_DURATION_DAYS = 7;
 
+const ABUSE_IGNORED_ACTIONS = new Set(['post-freeze', 'post-unfreeze', 'comment-freeze', 'comment-unfreeze']);
+
 export const ACTION_PREFIX = 'vainamoinen:actions:';
 export const ACTION_INDEX_KEY = `${ACTION_PREFIX}index`;
 export const ACTION_COUNT_PREFIX = `${ACTION_PREFIX}count:`;
@@ -70,6 +72,11 @@ export function legacyHistoryKey(username: string): string {
 
 export function legacyActionCountKey(username: string): string {
   return `${LEGACY_ACTION_COUNT_PREFIX}${username}`;
+}
+
+function shouldIgnoreForAbuse(action?: string): boolean {
+  if (!action) return false;
+  return ABUSE_IGNORED_ACTIONS.has(action);
 }
 
 async function ensureIndex(context: Context, username: string): Promise<void> {
@@ -158,8 +165,9 @@ export async function recordModeratorAction(
   if (action) {
     await incrementActionCount(context, username, action);
   }
-  const hourlyCount = trimmed.filter((entry) => entry.t > hourCutoff).length;
-  const dailyCount = trimmed.filter((entry) => entry.t > dayCutoff).length;
+  const relevantEntries = trimmed.filter((entry) => !shouldIgnoreForAbuse(entry.a));
+  const hourlyCount = relevantEntries.filter((entry) => entry.t > hourCutoff).length;
+  const dailyCount = relevantEntries.filter((entry) => entry.t > dayCutoff).length;
   return { hourlyCount, dailyCount, username, banned: false };
 }
 
@@ -168,6 +176,7 @@ export async function appendActionLogEntry(
   username: string,
   action: string,
   url?: string,
+  incrementCount = true,
 ): Promise<void> {
   if (!context.kvStore) return;
   const now = Date.now();
@@ -183,7 +192,9 @@ export async function appendActionLogEntry(
   await context.kvStore.put(key, trimmed);
   await context.kvStore.delete(legacyHistoryKey(username));
   await ensureIndex(context, username);
-  await incrementActionCount(context, username, action);
+  if (incrementCount) {
+    await incrementActionCount(context, username, action);
+  }
 }
 
 export async function applyBanIfNeeded(

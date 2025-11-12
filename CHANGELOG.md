@@ -11,3 +11,13 @@ All notable changes to this project will be documented in this file. This projec
 
 ### Changed
 - Action log entries now display compact Reddit links.
+
+## 1.1.0 - 2025-11-13
+
+### Added
+- Split Remove and Restore into dedicated actions with independent tracking and reporting.
+- Moderator-only Freeze/Unfreeze buttons for posts and comments, including action-log entries and freeze enforcement.
+- Subreddit utility to clean up legacy Remove/Restore count data without touching other metrics.
+
+### Changed
+- Action logs and dashboards now show separate Remove vs Restore totals while freeze actions bypass the abuse counter pipeline.

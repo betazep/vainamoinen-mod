@@ -1,12 +1,17 @@
 import type { Devvit } from '@devvit/public-api';
 import {
+  handleCommentFreezeToggle,
   handleCommentLockToggle,
-  handleCommentRemoveToggle,
+  handleCommentRemove,
+  handleCommentRestore,
+  handlePostFreezeToggle,
   handlePostLockToggle,
-  handlePostRemoveToggle,
+  handlePostRemove,
+  handlePostRestore,
   handlePostStickyToggle,
   handleInitialSetup,
   handleClearActionLog,
+  handleCleanupRemoveRestoreCounts,
   handleViewActionLog,
   handleViewActionCounts,
   handleViewMyActionLog,
@@ -27,11 +32,25 @@ export function registerMenuItems(Devvit: typeof import('@devvit/public-api').De
     onPress: handlePostStickyToggle,
   });
 
-  // Post: Remove/Restore toggle (Approve)
+  // Post: Remove (Approve)
   Devvit.addMenuItem({
     location: 'post',
-    label: 'Remove/Restore',
-    onPress: handlePostRemoveToggle,
+    label: 'Remove',
+    onPress: handlePostRemove,
+  });
+
+  // Post: Restore (Approve)
+  Devvit.addMenuItem({
+    location: 'post',
+    label: 'Restore',
+    onPress: handlePostRestore,
+  });
+
+  // Post: Freeze/Unfreeze (Moderator only)
+  Devvit.addMenuItem({
+    location: 'post',
+    label: 'Freeze/Unfreeze State (Mod)',
+    onPress: handlePostFreezeToggle,
   });
 
   // Comment: Lock/Unlock toggle
@@ -41,11 +60,25 @@ export function registerMenuItems(Devvit: typeof import('@devvit/public-api').De
     onPress: handleCommentLockToggle,
   });
 
-  // Comment: Remove/Restore toggle (Approve)
+  // Comment: Remove (Approve)
   Devvit.addMenuItem({
     location: 'comment',
-    label: 'Remove/Restore',
-    onPress: handleCommentRemoveToggle,
+    label: 'Remove',
+    onPress: handleCommentRemove,
+  });
+
+  // Comment: Restore (Approve)
+  Devvit.addMenuItem({
+    location: 'comment',
+    label: 'Restore',
+    onPress: handleCommentRestore,
+  });
+
+  // Comment: Freeze/Unfreeze (Moderator only)
+  Devvit.addMenuItem({
+    location: 'comment',
+    label: 'Freeze/Unfreeze State (Mod)',
+    onPress: handleCommentFreezeToggle,
   });
 
   // Subreddit: Moderator-only initial setup
@@ -68,6 +101,13 @@ export function registerMenuItems(Devvit: typeof import('@devvit/public-api').De
     label: 'Clear Action Log',
     forUserType: 'moderator',
     onPress: handleClearActionLog,
+  });
+
+  Devvit.addMenuItem({
+    location: 'subreddit',
+    label: 'Cleanup Remove/Restore Counts',
+    forUserType: 'moderator',
+    onPress: handleCleanupRemoveRestoreCounts,
   });
 
   Devvit.addMenuItem({

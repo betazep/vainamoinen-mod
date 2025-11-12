@@ -5,7 +5,7 @@ This is an app that delegates moderation powers to established community members
 
 ## Highlights
 
-- Delegated actions: Lock/Unlock, Sticky/Unsticky, and Remove/Restore on posts and comments.
+- Delegated actions: Lock/Unlock, Sticky/Unsticky, Remove, Restore, plus mod-only Freeze/Unfreeze controls to pause activity on a single post or comment.
 - Role-based access: "Baby Väinämöinen" and "Väinämöinen" flair thresholds enforced at click time.
 - Automated setup: one-click menu task seeds flair templates, Automod karma rules, and a stickied onboarding comment for every new submission.
 - Abuse protections: rate-limited action tracker with automatic warnings and 7-day bans for repeated abuse, plus moderator dashboards for audit and cleanup.
@@ -37,8 +37,10 @@ This is an app that delegates moderation powers to established community members
 ### Moderator Utilities
 
 - **View Action Log** – timestamped action history per user (last 20 days).
-- **View Action Counts** – lifetime totals of each delegated action.
+- **View Action Counts** – lifetime totals of each delegated action (Remove and Restore tracked separately).
 - **Clear Action Log** – deletes stored timestamps while retaining cumulative counts.
+- **Freeze/Unfreeze State (Mod)** – post/comment buttons that block delegated Remove/Restore/Lock/Sticky until unfrozen.
+- **Cleanup Remove/Restore Counts** – temporary maintenance button that strips legacy combined counts without touching other metrics.
 
 ### User Utilities
 - **My Action Log** – available to everyone for personal accountability.
