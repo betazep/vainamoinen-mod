@@ -13,11 +13,19 @@ import {
   appendActionLogEntry,
 } from './abuseTracker.js';
 import { resultForm } from './forms/resultForm.js';
-import { ensureModeratorOrToast, ensureNotBanned, ensureRoleOrToast, warnIfAbusive } from './menuGuards.js';
+import { ensureModeratorOrToast, ensureNotBanned, ensureRoleOrToast, warnIfAbusive, isModerator } from './menuGuards.js';
 import { isRemoveRestoreCommentsEnabled, isRemoveRestorePostsEnabled } from './menuSettings.js';
 import { BABY_FLAIR, MAIN_FLAIR, Role } from './roles.js';
 import { isTargetFrozen, toggleTargetFrozen } from './freezeState.js';
 import type { FreezeTargetType } from './freezeState.js';
+import {
+  appendTargetLogEntry,
+  clearAllTargetLogs,
+  getTargetLogEntries,
+  hasUserActedOnTarget,
+  markUserActedOnTarget,
+} from './targetLogs.js';
+import type { TargetLogEntry } from './targetLogs.js';
 import {
   randomLockPrefix,
   randomRemovePrefix,
@@ -30,9 +38,191 @@ type ActionResult = {
   actionId?: string;
   performed?: boolean;
   skipAbuseTracking?: boolean;
+  reason?: string;
+  targetType?: FreezeTargetType;
+  targetId?: string;
 };
 
 const LEGACY_REMOVE_COUNTER_KEYS = ['post-remove-toggle', 'comment-remove-toggle'];
+const ACTION_REASON_MAX_LENGTH = 30;
+const SINGLE_ACTION_TOAST = 'You may only call Väinämöinen once for this item.';
+const PENDING_REASON_PREFIX = 'vainamoinen:pending:reason:';
+type ReasonAction =
+  | 'post-lock'
+  | 'comment-lock'
+  | 'post-remove'
+  | 'post-restore'
+  | 'comment-remove'
+  | 'comment-restore';
+
+type ReasonFormData = {
+  title?: string;
+  description?: string;
+};
+
+const reasonForm = Devvit.createForm(
+  (data: ReasonFormData) => ({
+    title: data.title ?? 'Action Reason',
+    description: data.description ?? 'Provide a short reason (30 characters max).',
+    acceptLabel: 'Submit',
+    cancelLabel: 'Cancel',
+    fields: [
+      {
+        type: 'string',
+        name: 'reason',
+        label: 'Reason',
+        maxLength: ACTION_REASON_MAX_LENGTH,
+        required: true,
+      },
+    ],
+  }),
+  async (event, formContext) => {
+    const reason = sanitizeReason((event.values.reason as string | undefined) ?? '');
+    if (!reason) {
+      formContext.ui.showToast('Please provide a reason (max 50 characters).');
+      return;
+    }
+    const username = await formContext.reddit.getCurrentUsername();
+    if (!username) {
+      formContext.ui.showToast('You must be logged in to perform this action.');
+      return;
+    }
+    const payload = await loadPendingReasonPayload(formContext, username);
+    if (!payload) {
+      formContext.ui.showToast('This request expired. Please retry.');
+      return;
+    }
+    await deletePendingReasonPayload(formContext, username);
+    const { action, targetId, targetType } = payload;
+    try {
+      switch (action) {
+        case 'post-lock':
+          await guardAction(
+            formContext,
+            [Role.Baby, Role.Main],
+            () => togglePostLock(formContext, targetId),
+            { actionName: 'post-lock', targetType: 'post', targetId, enforceSingleAction: true, reason },
+          );
+          break;
+        case 'comment-lock':
+          await guardAction(
+            formContext,
+            [Role.Baby, Role.Main],
+            () => toggleCommentLock(formContext, targetId),
+            { actionName: 'comment-lock', targetType: 'comment', targetId, enforceSingleAction: true, reason },
+          );
+          break;
+        case 'post-remove':
+          await guardAction(
+            formContext,
+            [Role.Main],
+            () => removePost(formContext, targetId),
+            { actionName: 'post-remove', targetType: 'post', targetId, enforceSingleAction: true, reason },
+          );
+          break;
+        case 'post-restore':
+          await guardAction(
+            formContext,
+            [Role.Main],
+            () => restorePost(formContext, targetId),
+            { actionName: 'post-restore', targetType: 'post', targetId, enforceSingleAction: true, reason },
+          );
+          break;
+        case 'comment-remove':
+          await guardAction(
+            formContext,
+            [Role.Main],
+            () => removeComment(formContext, targetId),
+            { actionName: 'comment-remove', targetType: 'comment', targetId, enforceSingleAction: true, reason },
+          );
+          break;
+        case 'comment-restore':
+          await guardAction(
+            formContext,
+            [Role.Main],
+            () => restoreComment(formContext, targetId),
+            { actionName: 'comment-restore', targetType: 'comment', targetId, enforceSingleAction: true, reason },
+          );
+          break;
+        default:
+          formContext.ui.showToast('Unknown action.');
+      }
+    } catch (error) {
+      console.error('[vainamoinen] reason form submit failed', error);
+      formContext.ui.showToast('Failed to perform action.');
+    }
+  },
+);
+
+function sanitizeReason(reason?: string): string | undefined {
+  if (!reason) return undefined;
+  const trimmed = reason.trim().slice(0, ACTION_REASON_MAX_LENGTH);
+  if (!trimmed) return undefined;
+  // Allow printable ASCII only to keep logs clean.
+  const ascii = trimmed.replace(/[^\x09\x0A\x0D\x20-\x7E]/g, '');
+  const singleLine = ascii.replace(/[\r\n\t]+/g, ' ').trim();
+  return singleLine || undefined;
+}
+
+function formatTimestamp(ts: number): string {
+  // Compact UTC display: YY-MM-DD HH:MM:SSZ
+  const iso = new Date(ts).toISOString();
+  return `${iso.slice(2, 4)}-${iso.slice(5, 7)}-${iso.slice(8, 10)} ${iso.slice(11, 19)}Z`;
+}
+
+async function savePendingReasonPayload(
+  context: Devvit.Context,
+  username: string,
+  payload: ReasonFormData & { action: ReasonAction; targetId: string; targetType: FreezeTargetType },
+): Promise<void> {
+  if (!context.kvStore) return;
+  await context.kvStore.put(`${PENDING_REASON_PREFIX}${username}`, payload);
+}
+
+async function loadPendingReasonPayload(
+  context: Devvit.Context,
+  username: string,
+): Promise<(ReasonFormData & { action: ReasonAction; targetId: string; targetType: FreezeTargetType }) | undefined> {
+  if (!context.kvStore) return undefined;
+  const value = await context.kvStore.get(`${PENDING_REASON_PREFIX}${username}`);
+  if (value && typeof value === 'object') {
+    const raw = value as { action?: ReasonAction; targetId?: string; targetType?: FreezeTargetType };
+    if (raw.action && raw.targetId && raw.targetType) {
+      return { action: raw.action, targetId: raw.targetId, targetType: raw.targetType };
+    }
+  }
+  return undefined;
+}
+
+async function deletePendingReasonPayload(context: Devvit.Context, username: string): Promise<void> {
+  if (!context.kvStore) return;
+  await context.kvStore.delete(`${PENDING_REASON_PREFIX}${username}`);
+}
+
+async function showReasonForm(
+  context: Devvit.Context,
+  payload: { action: ReasonAction; targetId: string; targetType: FreezeTargetType; title?: string; description?: string },
+): Promise<void> {
+  const username = await context.reddit.getCurrentUsername();
+  if (!username) {
+    context.ui.showToast('You must be logged in to perform this action.');
+    return;
+  }
+  if (!context.kvStore) {
+    context.ui.showToast('KV Store unavailable.');
+    return;
+  }
+  try {
+    await savePendingReasonPayload(context, username, payload);
+    context.ui.showForm(reasonForm, {
+      title: payload.title ?? 'Action Reason',
+      description: payload.description ?? 'Provide a short reason (30 characters max).',
+    });
+  } catch (error) {
+    console.error('[vainamoinen] showReasonForm failed', error, { payload });
+    throw error;
+  }
+}
 
 async function ensureTargetThawed(
   context: Devvit.Context,
@@ -56,7 +246,7 @@ async function logActionWithoutCounts(
   const username = await context.reddit.getCurrentUsername();
   if (!username) return;
   try {
-    await appendActionLogEntry(context, username, actionId, url, false);
+    await appendActionLogEntry(context, username, actionId, url, undefined, undefined, false);
   } catch (error) {
     console.error('[vainamoinen] failed to log freeze action', error);
   }
@@ -69,19 +259,16 @@ function formatPermalink(permalink?: string): string | undefined {
       ? new URL(permalink)
       : new URL(`https://www.reddit.com${permalink}`);
     const segments = url.pathname.split('/').filter(Boolean);
-    if (url.hostname === 'www.reddit.com') {
-      url.hostname = 'reddit.com';
-    }
     if (segments.length >= 5 && segments[0] === 'r' && segments[2] === 'comments') {
-      // Drop the human-readable slug segment to keep the permalink short.
-      segments.splice(4, 1);
+      // segments: r/<sub>/comments/<postId>/<slug>/<commentId?>
+      const postId = segments[3];
+      const commentId = segments[5];
+      if (commentId) {
+        return `redd.it/comments/${postId}/${commentId}`;
+      }
+      return `redd.it/${postId}`;
     }
-    const trailingSlash = url.pathname.endsWith('/') ? '/' : '';
-    const path = segments.join('/');
-    let trimmedUrl = path ? `${url.hostname}/${path}${trailingSlash}` : `${url.hostname}${trailingSlash}`;
-    if (url.search) trimmedUrl += url.search;
-    if (url.hash) trimmedUrl += url.hash;
-    return trimmedUrl;
+    return `redd.it${url.pathname}`;
   } catch {
     return permalink;
   }
@@ -290,24 +477,57 @@ async function ensureFeatureEnabled(
   return false;
 }
 
+type GuardOptions = {
+  actionName?: string;
+  targetType?: FreezeTargetType;
+  targetId?: string;
+  enforceSingleAction?: boolean;
+  reason?: string;
+};
+
 async function guardAction(
   context: Devvit.Context,
   allowedRoles: Role[] | undefined,
   action: () => Promise<ActionResult | undefined>,
-  actionName?: string,
+  actionNameOrOptions?: string | GuardOptions,
 ): Promise<ActionResult | undefined> {
+  const options: GuardOptions = typeof actionNameOrOptions === 'string' ? { actionName: actionNameOrOptions } : (actionNameOrOptions ?? {});
   if (allowedRoles && allowedRoles.length > 0) {
     const role = await ensureRoleOrToast(context, allowedRoles);
     if (!role) return;
   }
   if (!(await ensureNotBanned(context))) return;
+  const { enforceSingleAction, targetId, targetType } = options;
+  let username: string | undefined;
+  if (enforceSingleAction && targetType && targetId) {
+    username = await context.reddit.getCurrentUsername();
+    if (!username) {
+      context.ui.showToast('You must be logged in to perform this action.');
+      return;
+    }
+    if (await hasUserActedOnTarget(context, targetType, targetId, username)) {
+      context.ui.showToast(SINGLE_ACTION_TOAST);
+      return;
+    }
+  }
   const result = await action();
   if (!result) return undefined;
   if (result.performed === false) return result;
-  if (result.skipAbuseTracking) return result;
-  const finalAction = result.actionId ?? actionName;
-  if (!finalAction) return result;
-  await warnIfAbusive(context, finalAction, result.url);
+  const finalAction = result.actionId ?? options.actionName;
+  const reason = sanitizeReason(result.reason ?? options.reason);
+  const finalTargetType = result.targetType ?? targetType;
+  const finalTargetId = result.targetId ?? targetId;
+  const actorUsername = username ?? (await context.reddit.getCurrentUsername());
+  const url = result.url;
+  if (!result.skipAbuseTracking && finalAction) {
+    await warnIfAbusive(context, finalAction, url, reason, finalTargetId);
+  }
+  if (finalTargetType && finalTargetId && finalAction) {
+    await appendTargetLogEntry(context, finalTargetType, finalTargetId, finalAction, reason, url, actorUsername);
+    if (enforceSingleAction && username) {
+      await markUserActedOnTarget(context, finalTargetType, finalTargetId, username);
+    }
+  }
   return result;
 }
 
@@ -316,8 +536,21 @@ export async function handlePostLockToggle(
   context: Devvit.Context,
 ): Promise<void> {
   try {
-    await guardAction(context, [Role.Baby, Role.Main], () => togglePostLock(context, event.targetId), 'post-lock');
+    const post = await context.reddit.getPostById(event.targetId);
+    const locked = post.isLocked();
+    const title = `Lock/Unlock Reason - Currently: ${locked ? 'Locked' : 'Unlocked'}`;
+    const description = locked
+      ? 'Provide a short reason for unlock (30 characters max).'
+      : 'Provide a short reason for lock (30 characters max).';
+    await showReasonForm(context, {
+      action: 'post-lock',
+      targetId: event.targetId,
+      targetType: 'post',
+      title,
+      description,
+    });
   } catch {
+    console.error('[vainamoinen] failed to open reason form for post lock');
     context.ui.showToast('Failed to toggle lock');
   }
 }
@@ -327,7 +560,12 @@ export async function handlePostStickyToggle(
   context: Devvit.Context,
 ): Promise<void> {
   try {
-    await guardAction(context, [Role.Main], () => togglePostSticky(context, event.targetId), 'post-sticky-toggle');
+    await guardAction(
+      context,
+      [Role.Main],
+      () => togglePostSticky(context, event.targetId),
+      { actionName: 'post-sticky-toggle', targetType: 'post', targetId: event.targetId, enforceSingleAction: true },
+    );
   } catch {
     context.ui.showToast('Failed to toggle sticky');
   }
@@ -339,8 +577,14 @@ export async function handlePostRemove(event: MenuItemOnPressEvent, context: Dev
     return;
   }
   try {
-    await guardAction(context, [Role.Main], () => removePost(context, event.targetId), 'post-remove');
+    await showReasonForm(context, {
+      action: 'post-remove',
+      targetId: event.targetId,
+      targetType: 'post',
+      title: 'Reason for Remove',
+    });
   } catch {
+    console.error('[vainamoinen] failed to open reason form for post remove');
     context.ui.showToast('Failed to remove post.');
   }
 }
@@ -351,8 +595,14 @@ export async function handlePostRestore(event: MenuItemOnPressEvent, context: De
     return;
   }
   try {
-    await guardAction(context, [Role.Main], () => restorePost(context, event.targetId), 'post-restore');
+    await showReasonForm(context, {
+      action: 'post-restore',
+      targetId: event.targetId,
+      targetType: 'post',
+      title: 'Reason for Restore',
+    });
   } catch {
+    console.error('[vainamoinen] failed to open reason form for post restore');
     context.ui.showToast('Failed to restore post.');
   }
 }
@@ -362,8 +612,21 @@ export async function handleCommentLockToggle(
   context: Devvit.Context,
 ): Promise<void> {
   try {
-    await guardAction(context, [Role.Baby, Role.Main], () => toggleCommentLock(context, event.targetId), 'comment-lock');
+    const comment = await context.reddit.getCommentById(event.targetId);
+    const locked = comment.isLocked();
+    const title = `Lock/Unlock Reason - Currently: ${locked ? 'Locked' : 'Unlocked'}`;
+    const description = locked
+      ? 'Provide a short reason for unlock (30 characters max).'
+      : 'Provide a short reason for lock (30 characters max).';
+    await showReasonForm(context, {
+      action: 'comment-lock',
+      targetId: event.targetId,
+      targetType: 'comment',
+      title,
+      description,
+    });
   } catch {
+    console.error('[vainamoinen] failed to open reason form for comment lock');
     context.ui.showToast('Failed to toggle lock');
   }
 }
@@ -374,8 +637,14 @@ export async function handleCommentRemove(event: MenuItemOnPressEvent, context: 
     return;
   }
   try {
-    await guardAction(context, [Role.Main], () => removeComment(context, event.targetId), 'comment-remove');
+    await showReasonForm(context, {
+      action: 'comment-remove',
+      targetId: event.targetId,
+      targetType: 'comment',
+      title: 'Reason for Remove',
+    });
   } catch {
+    console.error('[vainamoinen] failed to open reason form for comment remove');
     context.ui.showToast('Failed to remove comment.');
   }
 }
@@ -386,8 +655,14 @@ export async function handleCommentRestore(event: MenuItemOnPressEvent, context:
     return;
   }
   try {
-    await guardAction(context, [Role.Main], () => restoreComment(context, event.targetId), 'comment-restore');
+    await showReasonForm(context, {
+      action: 'comment-restore',
+      targetId: event.targetId,
+      targetType: 'comment',
+      title: 'Reason for Restore',
+    });
   } catch {
+    console.error('[vainamoinen] failed to open reason form for comment restore');
     context.ui.showToast('Failed to restore comment.');
   }
 }
@@ -549,13 +824,13 @@ function formatActionEntries(entriesValue: unknown): string[] {
   const entries = normalizeActionLog(entriesValue)
     .sort((a, b) => b.t - a.t)
     .map((entry) => {
-      const iso = new Date(entry.t).toISOString();
+      const iso = formatTimestamp(entry.t);
       const label = entry.a ? ACTION_LABELS[entry.a] ?? entry.a : undefined;
-      const base = label ? `${iso} — ${label}` : iso;
-      if (entry.u) {
-        return `${base}\n    ${entry.u}`;
-      }
-      return base;
+      const base = label ? `${iso}` : `${iso}`;
+      const labelLine = label ? `\n    ${label}` : '';
+      const urlLine = entry.u ? `\n    ${entry.u}` : '';
+      const reasonLine = entry.r ? `\n    "${entry.r}"` : '';
+      return `${base}${labelLine}${urlLine}${reasonLine}`;
     });
   return entries;
 }
@@ -568,10 +843,73 @@ function buildActionLogSnapshot(entries: Array<{ key: string; lines: string[] }>
     .map((entry) => {
       const username = entry.key.replace(ACTION_PREFIX, '');
       const lines = entry.lines.map((line) => `  - ${line}`);
-      const body = lines.length > 0 ? lines.join('\n') : '  (no recorded timestamps)';
-      return `${username}\n${body}`;
+      const separated = lines.length > 0 ? lines.join('\n-------------------------------\n') : '  (no recorded timestamps)';
+      return `${username}\n${separated}`;
     })
     .join('\n\n');
+}
+
+function formatTargetActionEntries(entries: TargetLogEntry[], showUser: boolean): string {
+  if (entries.length === 0) {
+    return 'No actions recorded for this item.';
+  }
+  return entries
+    .map((entry) => {
+      const iso = formatTimestamp(entry.t);
+      const label = entry.a ? ACTION_LABELS[entry.a] ?? entry.a : 'Action';
+      const reason = entry.r ?? 'No reason provided.';
+      const userLine = showUser && entry.user ? `\n    ${entry.user}` : '';
+      return `  - ${iso}${userLine}\n    ${label}\n    "${reason}"`;
+    })
+    .join('\n-------------------------------\n');
+}
+
+async function handleViewTargetActionLog(
+  context: Devvit.Context,
+  targetType: FreezeTargetType,
+  targetId: string,
+): Promise<void> {
+  if (!context.kvStore) {
+    context.ui.showToast('KV Store unavailable in this context.');
+    return;
+  }
+  try {
+    const entries = await getTargetLogEntries(context, targetType, targetId);
+    const isMod = await isModerator(context);
+    const body = formatTargetActionEntries(entries, isMod);
+    context.ui.showForm(resultForm, {
+      title: 'Community Mod Log',
+      description: targetType === 'post'
+        ? 'Actions taken on this post.\n\nContact one of the Subreddit Moderators if you believe there is abuse. You may also report the post using Reddit\'s built-in functionality.'
+        : 'Actions taken on this comment.\n\nContact one of the Subreddit Moderators if you believe there is abuse. You may also report the comment using Reddit\'s built-in functionality.',
+      fields: [
+        {
+          type: 'paragraph',
+          name: 'cm-actions',
+          label: 'Recent actions',
+          defaultValue: body,
+          lineHeight: 12,
+        },
+      ],
+    });
+  } catch (error) {
+    console.error('[vainamoinen] failed to load target action log', error);
+    context.ui.showToast('Failed to load actions for this item.');
+  }
+}
+
+export async function handleViewPostActionsLog(
+  event: MenuItemOnPressEvent,
+  context: Devvit.Context,
+): Promise<void> {
+  await handleViewTargetActionLog(context, 'post', event.targetId);
+}
+
+export async function handleViewCommentActionsLog(
+  event: MenuItemOnPressEvent,
+  context: Devvit.Context,
+): Promise<void> {
+  await handleViewTargetActionLog(context, 'comment', event.targetId);
 }
 
 export async function handleViewActionLog(
@@ -608,7 +946,6 @@ export async function handleViewActionLog(
           label: 'Recorded timestamps (UTC)',
           defaultValue: snapshot,
           lineHeight: 12,
-          disabled: true,
         },
       ],
     });
@@ -634,6 +971,9 @@ async function clearActionLogData(context: Devvit.Context): Promise<void> {
       }
     }),
   );
+  await clearAllTargetLogs(context);
+  await context.kvStore.delete(ACTION_INDEX_KEY);
+  await context.kvStore.delete(LEGACY_ACTION_INDEX_KEY);
   context.ui.showToast('Action log cleared (counts preserved).');
   console.log('[vainamoinen] action log cleared by moderator', { usernamesCleared: usernames });
 }
@@ -795,7 +1135,6 @@ export async function handleViewActionCounts(
           label: 'Totals',
           defaultValue: snapshot,
           lineHeight: 12,
-          disabled: true,
         },
       ],
     });
@@ -832,7 +1171,7 @@ export async function handleViewMyActionLog(
     const counts = aggregateActionCounts(countValue);
     const countsText = formatActionCountsForDisplay(counts);
     const logText = logLines.length
-      ? logLines.map((line) => `  - ${line}`).join('\n')
+      ? logLines.map((line) => `  - ${line}`).join('\n-------------------------------\n')
       : 'No actions recorded in the past 20 days.';
     context.ui.showForm(resultForm, {
       title: 'My Actions',
@@ -844,7 +1183,6 @@ export async function handleViewMyActionLog(
           label: 'Lifetime totals',
           defaultValue: countsText,
           lineHeight: 12,
-          disabled: true,
         },
         {
           type: 'paragraph',
@@ -852,7 +1190,6 @@ export async function handleViewMyActionLog(
           label: 'Recent actions (last 20 days)',
           defaultValue: logText,
           lineHeight: 12,
-          disabled: true,
         },
       ],
     });

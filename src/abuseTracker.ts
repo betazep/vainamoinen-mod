@@ -2,7 +2,7 @@ import type { Context } from '@devvit/public-api';
 
 const HOUR_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 const DAY_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 hours
-const LOG_WINDOW_MS = 20 * DAY_WINDOW_MS; // 20 days
+export const LOG_WINDOW_MS = 20 * DAY_WINDOW_MS; // 20 days
 const HOURLY_WARNING_THRESHOLD = 5;
 const HOURLY_LAST_WARNING_THRESHOLD = 6;
 export const HOURLY_BAN_THRESHOLD = 7;
@@ -32,6 +32,8 @@ export type StoredAbuseAction = {
   t: number;
   a?: string;
   u?: string;
+  r?: string;
+  tid?: string;
 };
 
 export function normalizeActionLog(value: unknown): StoredAbuseAction[] {
@@ -45,11 +47,15 @@ export function normalizeActionLog(value: unknown): StoredAbuseAction[] {
         const timestamp = (entry as { t: unknown }).t;
         const action = (entry as { a?: unknown }).a;
         const url = (entry as { u?: unknown }).u;
+        const reason = (entry as { r?: unknown }).r;
+        const targetId = (entry as { tid?: unknown }).tid;
         if (typeof timestamp === 'number' && Number.isFinite(timestamp)) {
           return {
             t: timestamp,
             a: typeof action === 'string' ? action : undefined,
             u: typeof url === 'string' ? url : undefined,
+            r: typeof reason === 'string' ? reason : undefined,
+            tid: typeof targetId === 'string' ? targetId : undefined,
           } as StoredAbuseAction;
         }
       }
@@ -141,6 +147,8 @@ export async function recordModeratorAction(
   context: Context,
   action?: string,
   url?: string,
+  reason?: string,
+  targetId?: string,
 ): Promise<AbuseRecord | undefined> {
   if (!context.kvStore) return undefined;
   const username = await context.reddit.getCurrentUsername();
@@ -158,7 +166,7 @@ export async function recordModeratorAction(
   }
   const stored = normalizeActionLog(storedRaw);
   const trimmed = stored.filter((entry) => entry.t > now - LOG_WINDOW_MS);
-  trimmed.push({ t: now, a: action, u: url });
+  trimmed.push({ t: now, a: action, u: url, r: reason, tid: targetId });
   await context.kvStore.put(key, trimmed);
   await context.kvStore.delete(legacyHistoryKey(username));
   await ensureIndex(context, username);
@@ -176,6 +184,8 @@ export async function appendActionLogEntry(
   username: string,
   action: string,
   url?: string,
+  reason?: string,
+  targetId?: string,
   incrementCount = true,
 ): Promise<void> {
   if (!context.kvStore) return;
@@ -188,7 +198,7 @@ export async function appendActionLogEntry(
   }
   const stored = normalizeActionLog(storedRaw);
   const trimmed = stored.filter((entry) => entry.t > logCutoff);
-  trimmed.push({ t: now, a: action, u: url });
+  trimmed.push({ t: now, a: action, u: url, r: reason, tid: targetId });
   await context.kvStore.put(key, trimmed);
   await context.kvStore.delete(legacyHistoryKey(username));
   await ensureIndex(context, username);

@@ -53,14 +53,31 @@ export async function ensureModeratorOrToast(context: Devvit.Context): Promise<b
   }
 }
 
+export async function isModerator(context: Devvit.Context): Promise<boolean> {
+  const subredditName = context.subredditName;
+  const user = await context.reddit.getCurrentUser();
+  if (!subredditName || !user) {
+    return false;
+  }
+  try {
+    const permissions = await user.getModPermissionsForSubreddit(subredditName);
+    return permissions.length > 0;
+  } catch (error) {
+    console.error('[vainamoinen] failed to confirm moderator permissions silently', error);
+    return false;
+  }
+}
+
 export async function warnIfAbusive(
   context: Devvit.Context,
   action?: string,
   url?: string,
+  reason?: string,
+  targetId?: string,
 ): Promise<boolean> {
   if (!context.kvStore) return false;
   try {
-    const info = await recordModeratorAction(context, action, url);
+    const info = await recordModeratorAction(context, action, url, reason, targetId);
     if (!info) return false;
     const { hourlyCount, dailyCount, username, banned } = info;
     const message = getAbuseMessage(hourlyCount, dailyCount);
@@ -75,10 +92,10 @@ export async function warnIfAbusive(
       const bannedNow = await applyBanIfNeeded(context, username, exceedHourly, exceedDaily);
       if (bannedNow) {
         if (exceedHourly) {
-          await appendActionLogEntry(context, username, 'ban-hourly');
+          await appendActionLogEntry(context, username, 'ban-hourly', undefined, undefined, targetId);
         }
         if (exceedDaily) {
-          await appendActionLogEntry(context, username, 'ban-daily');
+          await appendActionLogEntry(context, username, 'ban-daily', undefined, undefined, targetId);
         }
         context.ui.showToast(message);
         return true;

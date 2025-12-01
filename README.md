@@ -5,10 +5,12 @@ This is an app that delegates moderation powers to established community members
 
 ## Highlights
 
-- Delegated actions: Lock/Unlock, Sticky/Unsticky, Remove, Restore, plus mod-only Freeze/Unfreeze controls to pause activity on a single post or comment.
+- Delegated actions: Lock/Unlock, Sticky/Unsticky, Remove, Restore, plus mod-only Freeze/Unfreeze controls to pause activity on a single post or comment. Each user can only do one action to any item.
+- Requires logged reasons for actions and logs are visible via individual item logs on the three dot menu for post and comments. (by all users) Only subreddit mods can see the users who performed actions, but everyone can see the reasons.
 - Role-based access: "Baby Väinämöinen" and "Väinämöinen" flair thresholds enforced at click time.
 - Automated setup: one-click menu task seeds flair templates, Automod karma rules, and a stickied onboarding comment for every new submission.
 - Abuse protections: rate-limited action tracker with automatic warnings and 7-day bans for repeated abuse, plus moderator dashboards for audit and cleanup.
+
 
 ## Installing & Setting Up
 
@@ -33,6 +35,7 @@ This is an app that delegates moderation powers to established community members
 - Väinämöinen (≥2000 subreddit karma): Lock/Unlock, Sticky/Unsticky, Remove/Restore.
 - Anyone without the required flair still sees the menu item, but receives a motivational toast instead of action.
 - Anti-abuse tracker warns at 5/10 actions (hour/day), issues a final warning at 6/11, and auto-bans for 7/12 within the same windows.
+- Complete logging via Community Moderator Logs.
 
 ### Moderator Utilities
 

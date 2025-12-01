@@ -10,6 +10,8 @@ import {
   handlePostRestore,
   handlePostStickyToggle,
   handleInitialSetup,
+  handleViewCommentActionsLog,
+  handleViewPostActionsLog,
   handleClearActionLog,
   handleViewActionLog,
   handleViewActionCounts,
@@ -22,13 +24,6 @@ export function registerMenuItems(Devvit: typeof import('@devvit/public-api').De
     location: 'post',
     label: 'Lock/Unlock',
     onPress: handlePostLockToggle,
-  });
-
-  // Post: Sticky/Unsticky toggle
-  Devvit.addMenuItem({
-    location: 'post',
-    label: 'Sticky/Unsticky',
-    onPress: handlePostStickyToggle,
   });
 
   // Post: Remove (Approve)
@@ -45,10 +40,24 @@ export function registerMenuItems(Devvit: typeof import('@devvit/public-api').De
     onPress: handlePostRestore,
   });
 
+  // Post: Community Mod Log
+  Devvit.addMenuItem({
+    location: 'post',
+    label: 'Community Mod Log',
+    onPress: handleViewPostActionsLog,
+  });
+
+  // Post: Sticky/Unsticky toggle
+  Devvit.addMenuItem({
+    location: 'post',
+    label: 'Sticky/Unsticky',
+    onPress: handlePostStickyToggle,
+  });
+
   // Post: Freeze/Unfreeze (Moderator only)
   Devvit.addMenuItem({
     location: 'post',
-    label: 'Freeze/Unfreeze State (Mod)',
+    label: 'Un/Freeze State (Sub Mod)',
     onPress: handlePostFreezeToggle,
   });
 
@@ -73,10 +82,17 @@ export function registerMenuItems(Devvit: typeof import('@devvit/public-api').De
     onPress: handleCommentRestore,
   });
 
+  // Comment: Community Mod Log
+  Devvit.addMenuItem({
+    location: 'comment',
+    label: 'Community Mod Log',
+    onPress: handleViewCommentActionsLog,
+  });
+
   // Comment: Freeze/Unfreeze (Moderator only)
   Devvit.addMenuItem({
     location: 'comment',
-    label: 'Freeze/Unfreeze State (Mod)',
+    label: 'Un/Freeze State (Sub Mod)',
     onPress: handleCommentFreezeToggle,
   });
 
