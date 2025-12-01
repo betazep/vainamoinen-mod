@@ -1,7 +1,7 @@
 import { Devvit, SettingScope } from '@devvit/public-api';
 import { registerMenuItems } from './menu.js';
 
-Devvit.configure({ redditAPI: true });
+Devvit.configure({ redditAPI: true, kvStore: true });
 
 // Installation settings for this app
 Devvit.addSettings([

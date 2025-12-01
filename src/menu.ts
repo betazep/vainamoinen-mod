@@ -11,7 +11,6 @@ import {
   handlePostStickyToggle,
   handleInitialSetup,
   handleClearActionLog,
-  handleCleanupRemoveRestoreCounts,
   handleViewActionLog,
   handleViewActionCounts,
   handleViewMyActionLog,
