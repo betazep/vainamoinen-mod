@@ -72,6 +72,7 @@ const reasonForm = Devvit.createForm(
         name: 'reason',
         label: 'Reason',
         maxLength: ACTION_REASON_MAX_LENGTH,
+        placeholder: '30 characters maximum to here^',
         required: true,
       },
     ],
