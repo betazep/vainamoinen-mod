@@ -976,6 +976,7 @@ export async function handleViewActionLog(
 
 function formatEntriesGroupedByTarget(
   entries: Array<{ t: number; a?: string; r?: string; user?: string }>,
+  showUser: boolean,
 ): string {
   return entries
     .slice()
@@ -983,7 +984,7 @@ function formatEntriesGroupedByTarget(
     .map((entry) => {
       const iso = formatTimestamp(entry.t);
       const label = entry.a ? ACTION_LABELS[entry.a] ?? entry.a : 'Action';
-      const userLine = entry.user ? `\n    ${entry.user}` : '';
+      const userLine = showUser && entry.user ? `\n    ${entry.user}` : '';
       const reason = entry.r ?? 'No reason provided.';
       return `  - ${iso}\n    ${label}${userLine}\n    "${reason}"`;
     })
@@ -1027,7 +1028,7 @@ export async function handleViewActionLogByTarget(
         ? 'No action log entries found.'
         : groups
             .map((group) => {
-              const entriesText = formatEntriesGroupedByTarget(group.entries);
+              const entriesText = formatEntriesGroupedByTarget(group.entries, true);
               return `${group.url}\n-------------------------------\n${entriesText}\n-------------------------------`;
             })
             .join('\n\n');
@@ -1046,6 +1047,66 @@ export async function handleViewActionLogByTarget(
     });
   } catch (error) {
     console.error('[vainamoinen] failed to load target-grouped action log', error);
+    context.ui.showToast('Failed to load action log. Check console for details.');
+  }
+}
+
+export async function handleViewActionLogByTargetPublic(
+  _event: MenuItemOnPressEvent,
+  context: Devvit.Context,
+): Promise<void> {
+  if (!(await ensureNotBanned(context))) return;
+  if (!context.kvStore) {
+    context.ui.showToast('KV Store unavailable in this context.');
+    return;
+  }
+  try {
+    const usernames = await loadTrackedUsernames(context);
+    const grouped = new Map<string, Array<{ t: number; a?: string; r?: string }>>();
+    for (const username of usernames) {
+      let value = await context.kvStore.get(historyKey(username));
+      if (!value) {
+        value = await context.kvStore.get(legacyHistoryKey(username));
+      }
+      const entries = normalizeActionLog(value);
+      for (const entry of entries) {
+        const url = entry.u ?? '(no link)';
+        const list = grouped.get(url) ?? [];
+        list.push({ t: entry.t, a: entry.a, r: entry.r });
+        grouped.set(url, list);
+      }
+    }
+    const groups = Array.from(grouped.entries()).map(([url, entries]) => ({
+      url,
+      entries,
+      newest: Math.max(...entries.map((e) => e.t)),
+    }));
+    groups.sort((a, b) => b.newest - a.newest);
+    const body =
+      groups.length === 0
+        ? 'No action log entries found.'
+        : groups
+            .map((group) => {
+              const entriesText = formatEntriesGroupedByTarget(group.entries, false);
+              return `${group.url}\n-------------------------------\n${entriesText}\n-------------------------------`;
+            })
+            .join('\n\n');
+    context.ui.showForm(resultForm, {
+      title: 'CM Action Log (Full)',
+      description:
+        'Latest community mod actions by post/comment. Usernames are hidden, but mods can see and review them. Report abuse via modmail.',
+      fields: [
+        {
+          type: 'paragraph',
+          name: 'action-log-by-target-public',
+          label: 'Actions by target',
+          defaultValue: body,
+          lineHeight: 12,
+        },
+      ],
+    });
+  } catch (error) {
+    console.error('[vainamoinen] failed to load public target-grouped action log', error);
     context.ui.showToast('Failed to load action log. Check console for details.');
   }
 }

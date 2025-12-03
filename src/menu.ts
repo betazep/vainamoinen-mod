@@ -15,6 +15,7 @@ import {
   handleClearActionLog,
   handleViewActionLog,
   handleViewActionLogByTarget,
+  handleViewActionLogByTargetPublic,
   handleViewActionCounts,
   handleViewMyActionLog,
 } from './menuHandlers.js';
@@ -101,6 +102,12 @@ export function registerMenuItems(Devvit: typeof import('@devvit/public-api').De
     location: 'subreddit',
     label: 'My Action Log',
     onPress: handleViewMyActionLog,
+  });
+
+  Devvit.addMenuItem({
+    location: 'subreddit',
+    label: 'CM Action Log (Full)',
+    onPress: handleViewActionLogByTargetPublic,
   });
 
   Devvit.addMenuItem({
