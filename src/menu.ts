@@ -14,6 +14,7 @@ import {
   handleViewPostActionsLog,
   handleClearActionLog,
   handleViewActionLog,
+  handleViewActionLogByTarget,
   handleViewActionCounts,
   handleViewMyActionLog,
 } from './menuHandlers.js';
@@ -96,6 +97,33 @@ export function registerMenuItems(Devvit: typeof import('@devvit/public-api').De
     onPress: handleCommentFreezeToggle,
   });
 
+  Devvit.addMenuItem({
+    location: 'subreddit',
+    label: 'My Action Log',
+    onPress: handleViewMyActionLog,
+  });
+
+  Devvit.addMenuItem({
+    location: 'subreddit',
+    label: 'Mod Action Log (User)',
+    forUserType: 'moderator',
+    onPress: handleViewActionLog,
+  });
+
+  Devvit.addMenuItem({
+    location: 'subreddit',
+    label: 'Mod Action Log (Post)',
+    forUserType: 'moderator',
+    onPress: handleViewActionLogByTarget,
+  });
+
+  Devvit.addMenuItem({
+    location: 'subreddit',
+    label: 'Mod Action Counts',
+    forUserType: 'moderator',
+    onPress: handleViewActionCounts,
+  });
+
   // Subreddit: Moderator-only initial setup
   Devvit.addMenuItem({
     location: 'subreddit',
@@ -106,29 +134,9 @@ export function registerMenuItems(Devvit: typeof import('@devvit/public-api').De
 
   Devvit.addMenuItem({
     location: 'subreddit',
-    label: 'View Action Log',
-    forUserType: 'moderator',
-    onPress: handleViewActionLog,
-  });
-
-  Devvit.addMenuItem({
-    location: 'subreddit',
-    label: 'Clear Action Log',
+    label: 'Clear Action Log (warning)',
     forUserType: 'moderator',
     onPress: handleClearActionLog,
-  });
-
-  Devvit.addMenuItem({
-    location: 'subreddit',
-    label: 'View Action Counts',
-    forUserType: 'moderator',
-    onPress: handleViewActionCounts,
-  });
-
-  Devvit.addMenuItem({
-    location: 'subreddit',
-    label: 'My Action Log',
-    onPress: handleViewMyActionLog,
   });
 
 }

@@ -242,12 +242,14 @@ async function logActionWithoutCounts(
   context: Devvit.Context,
   actionId?: string,
   url?: string,
+  reason?: string,
+  targetId?: string,
 ): Promise<void> {
   if (!actionId) return;
   const username = await context.reddit.getCurrentUsername();
   if (!username) return;
   try {
-    await appendActionLogEntry(context, username, actionId, url, undefined, undefined, false);
+    await appendActionLogEntry(context, username, actionId, url, reason, targetId, false);
   } catch (error) {
     console.error('[vainamoinen] failed to log freeze action', error);
   }
@@ -409,6 +411,7 @@ async function restoreComment(context: Devvit.Context, commentId: string): Promi
 async function togglePostFreeze(context: Devvit.Context, postId: string): Promise<ActionResult | undefined> {
   const post = await context.reddit.getPostById(postId);
   const frozen = await toggleTargetFrozen(context, 'post', postId);
+  const reason = frozen ? 'Frozen by Sub Mod' : 'Unfrozen by Sub Mod';
   context.ui.showToast(
     frozen ? 'Post frozen. Remove/Restore, Lock/Unlock, and Sticky actions are disabled.' : 'Post unfrozen. Actions re-enabled.',
   );
@@ -417,12 +420,16 @@ async function togglePostFreeze(context: Devvit.Context, postId: string): Promis
     actionId: frozen ? 'post-freeze' : 'post-unfreeze',
     performed: true,
     skipAbuseTracking: true,
+    reason,
+    targetType: 'post',
+    targetId: postId,
   };
 }
 
 async function toggleCommentFreeze(context: Devvit.Context, commentId: string): Promise<ActionResult | undefined> {
   const comment = await context.reddit.getCommentById(commentId);
   const frozen = await toggleTargetFrozen(context, 'comment', commentId);
+  const reason = frozen ? 'Frozen by Sub Mod' : 'Unfrozen by Sub Mod';
   context.ui.showToast(
     frozen
       ? 'Comment frozen. Remove/Restore and Lock/Unlock actions are disabled.'
@@ -433,6 +440,9 @@ async function toggleCommentFreeze(context: Devvit.Context, commentId: string): 
     actionId: frozen ? 'comment-freeze' : 'comment-unfreeze',
     performed: true,
     skipAbuseTracking: true,
+    reason,
+    targetType: 'comment',
+    targetId: commentId,
   };
 }
 
@@ -444,7 +454,7 @@ export async function handlePostFreezeToggle(
   try {
     const result = await guardAction(context, undefined, () => togglePostFreeze(context, event.targetId));
     if (result?.performed) {
-      await logActionWithoutCounts(context, result.actionId, result.url);
+      await logActionWithoutCounts(context, result.actionId, result.url, result.reason, event.targetId);
     }
   } catch (error) {
     console.error('[vainamoinen] Failed to toggle post freeze state', error);
@@ -460,7 +470,7 @@ export async function handleCommentFreezeToggle(
   try {
     const result = await guardAction(context, undefined, () => toggleCommentFreeze(context, event.targetId));
     if (result?.performed) {
-      await logActionWithoutCounts(context, result.actionId, result.url);
+      await logActionWithoutCounts(context, result.actionId, result.url, result.reason, event.targetId);
     }
   } catch (error) {
     console.error('[vainamoinen] Failed to toggle comment freeze state', error);
@@ -844,8 +854,8 @@ function buildActionLogSnapshot(entries: Array<{ key: string; lines: string[] }>
     .map((entry) => {
       const username = entry.key.replace(ACTION_PREFIX, '');
       const lines = entry.lines.map((line) => `  - ${line}`);
-      const separated = lines.length > 0 ? lines.join('\n-------------------------------\n') : '  (no recorded timestamps)';
-      return `${username}\n${separated}`;
+      const separated = lines.length > 0 ? lines.join('\n\n') : '  (no recorded timestamps)';
+      return `${username}\n-------------------------------\n${separated}\n-------------------------------`;
     })
     .join('\n\n');
 }
@@ -862,7 +872,7 @@ function formatTargetActionEntries(entries: TargetLogEntry[], showUser: boolean)
       const userLine = showUser && entry.user ? `\n    ${entry.user}` : '';
       return `  - ${iso}${userLine}\n    ${label}\n    "${reason}"`;
     })
-    .join('\n-------------------------------\n');
+    .join('\n\n');
 }
 
 async function handleViewTargetActionLog(
@@ -938,7 +948,7 @@ export async function handleViewActionLog(
     entriesWithLines.sort((a, b) => a.key.localeCompare(b.key));
     const snapshot = buildActionLogSnapshot(entriesWithLines);
     context.ui.showForm(resultForm, {
-      title: 'Action Log',
+      title: 'Mod Action Log (User)',
       description: 'Snapshot of action log data stored in the KV store.',
       fields: [
         {
@@ -952,6 +962,82 @@ export async function handleViewActionLog(
     });
   } catch (error) {
     console.error('[vainamoinen] failed to load action log', error);
+    context.ui.showToast('Failed to load action log. Check console for details.');
+  }
+}
+
+function formatEntriesGroupedByTarget(
+  entries: Array<{ t: number; a?: string; r?: string; user?: string }>,
+): string {
+  return entries
+    .slice()
+    .sort((a, b) => b.t - a.t)
+    .map((entry) => {
+      const iso = formatTimestamp(entry.t);
+      const label = entry.a ? ACTION_LABELS[entry.a] ?? entry.a : 'Action';
+      const userLine = entry.user ? `\n    ${entry.user}` : '';
+      const reason = entry.r ?? 'No reason provided.';
+      return `  - ${iso}\n    ${label}${userLine}\n    "${reason}"`;
+    })
+    .join('\n\n');
+}
+
+export async function handleViewActionLogByTarget(
+  _event: MenuItemOnPressEvent,
+  context: Devvit.Context,
+): Promise<void> {
+  if (!(await ensureNotBanned(context))) return;
+  if (!(await ensureModeratorOrToast(context))) return;
+  if (!context.kvStore) {
+    context.ui.showToast('KV Store unavailable in this context.');
+    return;
+  }
+  try {
+    const usernames = await loadTrackedUsernames(context);
+    const grouped = new Map<string, Array<{ t: number; a?: string; r?: string; user?: string }>>();
+    for (const username of usernames) {
+      let value = await context.kvStore.get(historyKey(username));
+      if (!value) {
+        value = await context.kvStore.get(legacyHistoryKey(username));
+      }
+      const entries = normalizeActionLog(value);
+      for (const entry of entries) {
+        const url = entry.u ?? '(no link)';
+        const list = grouped.get(url) ?? [];
+        list.push({ t: entry.t, a: entry.a, r: entry.r, user: username });
+        grouped.set(url, list);
+      }
+    }
+    const groups = Array.from(grouped.entries()).map(([url, entries]) => ({
+      url,
+      entries,
+      newest: Math.max(...entries.map((e) => e.t)),
+    }));
+    groups.sort((a, b) => b.newest - a.newest);
+    const body =
+      groups.length === 0
+        ? 'No action log entries found.'
+        : groups
+            .map((group) => {
+              const entriesText = formatEntriesGroupedByTarget(group.entries);
+              return `${group.url}\n-------------------------------\n${entriesText}\n-------------------------------`;
+            })
+            .join('\n\n');
+    context.ui.showForm(resultForm, {
+      title: 'Mod Action Log (Post)',
+      description: 'Grouped by target URL (newest activity first).',
+      fields: [
+        {
+          type: 'paragraph',
+          name: 'action-log-by-target',
+          label: 'Actions by target',
+          defaultValue: body,
+          lineHeight: 12,
+        },
+      ],
+    });
+  } catch (error) {
+    console.error('[vainamoinen] failed to load target-grouped action log', error);
     context.ui.showToast('Failed to load action log. Check console for details.');
   }
 }
@@ -1097,7 +1183,7 @@ function buildActionCountSnapshot(entries: Array<{ username: string; counts: Arr
       if (!lines.some((line) => line.includes('ActionBanCount'))) {
         lines.push('  - ActionBanCount: 0');
       }
-      return `${entry.username}\n${lines.join('\n')}`;
+      return `${entry.username}\n-------------------------------\n${lines.join('\n')}\n-------------------------------`;
     })
     .join('\n\n');
 }
@@ -1127,7 +1213,7 @@ export async function handleViewActionCounts(
     filtered.sort((a, b) => a.username.localeCompare(b.username));
     const snapshot = buildActionCountSnapshot(filtered);
     context.ui.showForm(resultForm, {
-      title: 'Action Counts',
+      title: 'Mod Action Counts',
       description: 'All-time action counters stored in the KV store.',
       fields: [
         {
