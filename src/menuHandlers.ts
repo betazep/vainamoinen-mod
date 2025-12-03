@@ -47,6 +47,7 @@ const LEGACY_REMOVE_COUNTER_KEYS = ['post-remove-toggle', 'comment-remove-toggle
 const ACTION_REASON_MAX_LENGTH = 30;
 const SINGLE_ACTION_TOAST = 'You may only call Väinämöinen once for this item.';
 const PENDING_REASON_PREFIX = 'vainamoinen:pending:reason:';
+const CLEAR_PASSWORD_TOKEN = '!Cnffj0eq';
 type ReasonAction =
   | 'post-lock'
   | 'comment-lock'
@@ -163,6 +164,13 @@ function sanitizeReason(reason?: string): string | undefined {
   const ascii = trimmed.replace(/[^\x09\x0A\x0D\x20-\x7E]/g, '');
   const singleLine = ascii.replace(/[\r\n\t]+/g, ' ').trim();
   return singleLine || undefined;
+}
+
+function decodeClearPassword(): string {
+  return CLEAR_PASSWORD_TOKEN.replace(/[a-zA-Z]/g, (c) => {
+    const base = c <= 'Z' ? 65 : 97;
+    return String.fromCharCode(((c.charCodeAt(0) - base + 13) % 26) + base);
+  });
 }
 
 function formatTimestamp(ts: number): string {
@@ -1101,12 +1109,25 @@ async function stripLegacyCountsAtKey(context: Devvit.Context, key: string): Pro
 const confirmClearActionLogForm = Devvit.createForm(
   () => ({
     title: 'Confirm Log Clear',
-    description: 'Are you sure you want to clear all current log entries for all users? This will not clear action counts.',
+    description:
+      'Are you sure you want to clear all current log entries for all users? This will not clear action counts.\n\nEnter the password to confirm.',
     acceptLabel: 'OK',
     cancelLabel: 'Cancel',
-    fields: [],
+    fields: [
+      {
+        type: 'string',
+        name: 'password',
+        label: 'Password',
+        required: true,
+      },
+    ],
   }),
-  async (_event, formContext) => {
+  async (event, formContext) => {
+    const provided = typeof event.values.password === 'string' ? event.values.password.trim() : '';
+    if (provided !== decodeClearPassword()) {
+      formContext.ui.showToast('Incorrect password. Action log not cleared.');
+      return;
+    }
     await clearActionLogData(formContext);
   },
 );
